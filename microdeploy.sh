@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
 # ============================================================
-# deploy.sh - Desplegar cambios: merge a main, push y actualizar remotos
+# deploy.sh - Desplegar cambios: merge a la rama principal, push y actualizar remoto
 # ============================================================
 # Proceso:
-#   1. git checkout main
-#   2. git merge <rama actual>            (CURRENT_BRANCH)
-#   3. git tag <tag> (opcional, sobre main)
+#   1. git checkout <main_branch>            (rama principal: main o master)
+#   2. git merge <rama actual>               (CURRENT_BRANCH)
+#   3. git tag <tag> (opcional, sobre la rama principal)
 #   4. git checkout <rama actual>
-#   5. git push github main dev
+#   5. git push github <main_branch> dev
 #   6. git push github <tag> (si se indicó --tag)
-#   7. En cada remoto (SSH): git pull + ./service.sh restart
+#   7. En el remoto (SSH): git pull + ./service.sh restart
 #
 # Uso:
-#   ./deploy.sh                # Despliega y actualiza todos los remotos configurados
+#   ./deploy.sh                # Lista los remotos configurados
 #   ./deploy.sh <nombre>       # Despliega y actualiza solo el remoto especificado
-#   ./deploy.sh --tag <tag>    # Despliega y además crea y pushea un tag a github
-#   ./deploy.sh --tag <tag> <nombre> # Ídem limitado a un remoto
+#   ./deploy.sh --tag <tag> <nombre> # Ídem, además crea y pushea un tag a github
 #   ./deploy.sh --list         # Lista los remotos configurados
 #   ./deploy.sh --add          # Agrega un remoto interactivamente
 #   ./deploy.sh --remove <nombre> # Elimina un remoto
 #   ./deploy.sh --help         # Muestra esta ayuda
 #
-# Configuración en: remotes.conf (formato: nombre|user@host|directorio|rama)
-# Nota: el paso 5 ejecuta ./service.sh restart en el remoto; ese comando
+# Configuración en: remotes.conf (formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch)
+# Nota: el paso 7 ejecuta ./service.sh restart en el remoto; ese comando
 #       requiere permisos de root en el servidor (sudo sin contraseña).
 # ============================================================
 
@@ -47,16 +46,34 @@ log_err()  { echo -e "${RED}[ERR]${NC} $*"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
 
 # Cargar configuración
+# Formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch
 load_remotes() {
     REMOTES=()
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         return
     fi
-    while IFS='|' read -r name host dir branch; do
+    while IFS= read -r line; do
         # Ignorar líneas vacías y comentarios
-        [[ -z "${name// }" ]] && continue
-        [[ "${name}" =~ ^#.* ]] && continue
-        REMOTES+=("${name}|${host}|${dir}|${branch}")
+        [[ -z "${line// }" ]] && continue
+        [[ "${line}" =~ ^[[:space:]]*#.* ]] && continue
+
+        IFS='|' read -ra f <<< "${line}"
+        local n="${#f[@]}"
+
+        if [[ ${n} -eq 4 ]]; then
+            # Formato viejo (4 campos): nombre|user@host|dir_remoto|rama
+            log_warn "Remoto '${f[0]}' en formato antiguo: se usa '${SCRIPT_DIR}' como directorio local y 'main' como rama principal"
+            REMOTES+=("${f[0]}|${f[1]}|${SCRIPT_DIR}|${f[2]}|${f[3]}|main")
+            continue
+        fi
+
+        if [[ ${n} -eq 5 || ${n} -eq 6 ]]; then
+            # nombre|host|dir_local|dir_remoto|rama|main_branch
+            REMOTES+=("${f[0]}|${f[1]}|${f[2]}|${f[3]}|${f[4]:-main}|${f[5]:-main}")
+            continue
+        fi
+
+        log_warn "Línea ignorada (${n} campos): ${line}"
     done < "${CONFIG_FILE}"
 }
 
@@ -73,11 +90,11 @@ cmd_list() {
         return
     fi
     echo -e "${CYAN}Remotos configurados:${NC}"
-    printf "%-20s %-30s %-40s %s\n" "NOMBRE" "HOST" "DIRECTORIO" "RAMA"
-    printf "%-20s %-30s %-40s %s\n" "──────" "────" "────────" "────"
+    printf "%-16s %-24s %-30s %-30s %-10s %s\n" "NOMBRE" "HOST" "DIR LOCAL" "DIR REMOTO" "RAMA" "RAMA PRINCIPAL"
+    printf "%-16s %-24s %-30s %-30s %-10s %s\n" "──────" "────" "──────" "──────" "────" "──────"
     for entry in "${REMOTES[@]}"; do
-        IFS='|' read -r name host dir branch <<< "${entry}"
-        printf "%-20s %-30s %-40s %s\n" "${name}" "${host}" "${dir}" "${branch}"
+        IFS='|' read -r name host local_dir remote_dir branch main_branch <<< "${entry}"
+        printf "%-16s %-24s %-30s %-30s %-10s %s\n" "${name}" "${host}" "${local_dir}" "${remote_dir}" "${branch}" "${main_branch}"
     done
 }
 
@@ -87,20 +104,28 @@ cmd_add() {
     echo -e "${CYAN}Agregar nuevo remoto${NC}"
     read -rp "Nombre (ej. produccion): " name
     read -rp "Usuario@Host (ej. ubuntu@192.168.1.100): " host
-    read -rp "Directorio remoto (ej. /home/ubuntu/baileys-bridge): " dir
-    read -rp "Rama (default: main): " branch
+    read -rp "Directorio local del proyecto (ej. /home/jose/mi-proyecto): " local_dir
+    read -rp "Directorio remoto (ej. /home/ubuntu/mi-proyecto): " remote_dir
+    read -rp "Rama a desplegar en el remoto (default: main): " branch
     branch="${branch:-main}"
+    read -rp "Rama principal local, main/master (default: main): " main_branch
+    main_branch="${main_branch:-main}"
 
     # Validar que no exista
     for entry in "${REMOTES[@]}"; do
-        IFS='|' read -r n _ _ _ <<< "${entry}"
+        IFS='|' read -r n _ _ _ _ _ <<< "${entry}"
         if [[ "${n}" == "${name}" ]]; then
             log_err "Ya existe un remoto con nombre '${name}'"
             return 1
         fi
     done
 
-    REMOTES+=("${name}|${host}|${dir}|${branch}")
+    # Aviso no bloqueante si el directorio local no existe en este equipo
+    if [[ ! -d "${local_dir}" ]]; then
+        log_warn "El directorio local '${local_dir}' no existe en este equipo"
+    fi
+
+    REMOTES+=("${name}|${host}|${local_dir}|${remote_dir}|${branch}|${main_branch}")
     save_remotes
     log_ok "Remoto '${name}' agregado"
 }
@@ -117,7 +142,7 @@ cmd_remove() {
     local new_remotes=()
     local found=false
     for entry in "${REMOTES[@]}"; do
-        IFS='|' read -r name _ _ _ <<< "${entry}"
+        IFS='|' read -r name _ _ _ _ _ <<< "${entry}"
         if [[ "${name}" == "${target}" ]]; then
             found=true
         else
@@ -135,14 +160,36 @@ cmd_remove() {
     log_ok "Remoto '${target}' eliminado"
 }
 
-# Pasos locales: merge de la rama actual a main y push a github
-#   git checkout main && git merge CURRENT_BRANCH && git tag <tag> && git checkout CURRENT_BRANCH && git push github main dev && git push github <tag>
-# El tag (opcional) se crea sobre main, apuntando al commit ya mergeado.
+# Pasos locales: merge de la rama actual a la rama principal y push a github
+#   git checkout <main_branch> && git merge CURRENT_BRANCH && git tag <tag> && git checkout CURRENT_BRANCH && git push github <main_branch> dev && git push github <tag>
+# El tag (opcional) se crea sobre la rama principal, apuntando al commit ya mergeado.
+# Recibe: directorio local del proyecto, rama principal (main/master) y tag opcional.
 deploy_local() {
-    local tag="${1:-}"
+    local local_dir="${1:-}"
+    local main_branch="${2:-}"
+    local tag="${3:-}"
 
-    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        log_err "No estás dentro de un repositorio git"
+    # La rama principal es obligatoria y configura por remoto (formato viejo => main)
+    main_branch="${main_branch:-main}"
+
+    if [[ -z "${local_dir}" ]]; then
+        log_err "Falta el directorio local del proyecto en la configuración"
+        return 1
+    fi
+    if [[ ! -d "${local_dir}" ]]; then
+        log_err "El directorio local '${local_dir}' no existe"
+        return 1
+    fi
+    if ! git -C "${local_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log_err "'${local_dir}' no es un repositorio git"
+        return 1
+    fi
+
+    # Trabajar dentro del directorio local del proyecto
+    cd "${local_dir}"
+
+    if ! git show-ref --verify --quiet "refs/heads/${main_branch}"; then
+        log_err "No existe la rama '${main_branch}' en ${local_dir}"
         return 1
     fi
 
@@ -154,6 +201,7 @@ deploy_local() {
     fi
 
     log_info "Rama actual (CURRENT_BRANCH): ${current_branch}"
+    log_info "Rama principal: ${main_branch}"
 
     # Validar el tag antes de tocar las ramas para no dejar el repo a medias
     if [[ -n "${tag}" ]] && git rev-parse --verify "refs/tags/${tag}" >/dev/null 2>&1; then
@@ -161,8 +209,8 @@ deploy_local() {
         return 1
     fi
 
-    log_step "git checkout main"
-    git checkout main
+    log_step "git checkout ${main_branch}"
+    git checkout "${main_branch}"
 
     log_step "git merge --no-edit ${current_branch}"
     git merge --no-edit "${current_branch}"
@@ -175,8 +223,8 @@ deploy_local() {
     log_step "git checkout ${current_branch}"
     git checkout "${current_branch}"
 
-    log_step "git push github main dev"
-    git push github main dev
+    log_step "git push github ${main_branch} dev"
+    git push github "${main_branch}" dev
 
     if [[ -n "${tag}" ]]; then
         log_step "git push github ${tag}"
@@ -184,9 +232,9 @@ deploy_local() {
     fi
 
     if [[ -n "${tag}" ]]; then
-        log_ok "Pasos locales completados: main actualizada, pusheada a github (tag: ${tag})"
+        log_ok "Pasos locales completados: ${main_branch} actualizada, pusheada a github (tag: ${tag})"
     else
-        log_ok "Pasos locales completados: main actualizada y pusheada a github"
+        log_ok "Pasos locales completados: ${main_branch} actualizada y pusheada a github"
     fi
 }
 
@@ -194,10 +242,10 @@ deploy_local() {
 update_remote() {
     local name="${1}"
     local host="${2}"
-    local dir="${3}"
+    local remote_dir="${3}"
     local branch="${4}"
 
-    log_step "Actualizando ${name} (${host}:${dir})..."
+    log_step "Actualizando ${name} (${host}:${remote_dir})..."
 
     # Verificar conectividad SSH
     if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "${host}" "true" 2>/dev/null; then
@@ -208,7 +256,7 @@ update_remote() {
     # En el remoto: git pull + ./service.sh restart
     local cmd="
         set -euo pipefail
-        cd '${dir}' || { echo 'Directorio no existe'; exit 1; }
+        cd '${remote_dir}' || { echo 'Directorio no existe'; exit 1; }
         echo 'Directorio actual: '\$(pwd)
         git pull origin '${branch}' 2>&1
         echo 'Git pull completado'
@@ -256,15 +304,17 @@ parse_deploy_args() {
     done
 }
 
-# Desplegar: pasos locales + actualizar todos o uno específico
+# Desplegar: pasos locales + actualizar un remoto específico (obligatorio)
 cmd_deploy() {
     if ! command -v git >/dev/null 2>&1; then
         log_err "git no está disponible en este sistema"
         return 1
     fi
 
-    # Pasos locales (merge a main + push + tag opcional), siempre antes de tocar remotos
-    deploy_local "${TAG}"
+    if [[ -z "${TARGET}" ]]; then
+        log_err "Debes especificar el remoto a actualizar (ej. $0 produccion)."
+        return 1
+    fi
 
     load_remotes
     if [[ ${#REMOTES[@]} -eq 0 ]]; then
@@ -272,17 +322,41 @@ cmd_deploy() {
         return 1
     fi
 
+    # Validar que el remoto exista antes de tocar el repositorio local
+    local found=false
+    for entry in "${REMOTES[@]}"; do
+        IFS='|' read -r name _ _ _ _ _ <<< "${entry}"
+        if [[ "${name}" == "${TARGET}" ]]; then
+            found=true
+            break
+        fi
+    done
+    if [[ "${found}" == false ]]; then
+        log_err "No se encontró remoto '${TARGET}'"
+        return 1
+    fi
+
     local failed=0
     local success=0
+    declare -A processed_dirs
 
     for entry in "${REMOTES[@]}"; do
-        IFS='|' read -r name host dir branch <<< "${entry}"
+        IFS='|' read -r name host local_dir remote_dir branch main_branch <<< "${entry}"
 
-        if [[ -n "${TARGET}" && "${name}" != "${TARGET}" ]]; then
+        if [[ "${name}" != "${TARGET}" ]]; then
             continue
         fi
 
-        if update_remote "${name}" "${host}" "${dir}" "${branch}"; then
+        # Pasos locales solo una vez por combinación directorio local + rama principal
+        local key="${local_dir}|${main_branch}"
+        if [[ -z "${processed_dirs[${key}]:-}" ]]; then
+            if ! deploy_local "${local_dir}" "${main_branch}" "${TAG}"; then
+                return 1
+            fi
+            processed_dirs["${key}"]=1
+        fi
+
+        if update_remote "${name}" "${host}" "${remote_dir}" "${branch}"; then
             ((success++))
         else
             ((failed++))
@@ -290,7 +364,7 @@ cmd_deploy() {
         echo
     done
 
-    echo -e "${CYAN}Resumen:${NC} ${success} exitosos, ${failed} fallidos"
+    echo -e "${CYAN}Resumen:${NC} ${success} exitoso(s), ${failed} fallido(s)"
     if [[ ${failed} -gt 0 ]]; then
         return 1
     fi
@@ -299,33 +373,35 @@ cmd_deploy() {
 # Mostrar ayuda
 show_help() {
     cat <<EOF
-${CYAN}deploy.sh${NC} - Desplegar cambios: merge a main, push y actualizar remotos
+${CYAN}deploy.sh${NC} - Desplegar cambios: merge a la rama principal, push y actualizar un remoto
 
 ${BLUE}Proceso:${NC}
-  1. git checkout main
+  1. git checkout <rama principal> (main/master, configurable)
   2. git merge <rama actual>
-  3. git tag <tag> (opcional, sobre main)
+  3. git tag <tag> (opcional, sobre la rama principal)
   4. git checkout <rama actual>
-  5. git push github main dev
+  5. git push github <rama principal> dev
   6. git push github <tag> (si se indicó --tag)
-  7. En cada remoto (SSH): git pull + ./service.sh restart
+  7. En el remoto (SSH): git pull + ./service.sh restart
 
 ${BLUE}Uso:${NC}
-  $0                    Despliega y actualiza todos los remotos
+  $0                    Lista los remotos configurados
   $0 <nombre>           Despliega y actualiza solo el remoto especificado
-  $0 --tag <tag>        Despliega y además crea y pushea un tag a github
-  $0 --tag <tag> <nombre>  Ídem limitado al remoto especificado
+  $0 --tag <tag> <nombre>  Despliega el remoto y además crea y pushea un tag a github
   $0 --list             Lista los remotos configurados
   $0 --add              Agrega un remoto interactivamente
   $0 --remove <nombre>  Elimina un remoto
   $0 --help             Muestra esta ayuda
 
+${BLUE}Nota:${NC} el despliegue siempre requiere indicar el remoto a actualizar.
+No existe opción para actualizar todos los remotos a la vez.
+
 ${BLUE}Archivo de configuración:${NC} ${CONFIG_FILE}
-Formato: nombre|user@host|directorio|rama
+Formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch
 
 ${BLUE}Ejemplo remotes.conf:${NC}
-  produccion|ubuntu@192.168.1.100|/home/ubuntu/baileys-bridge|main
-  staging|deploy@staging.empresa.com|/opt/baileys-bridge|develop
+  produccion|ubuntu@192.168.1.100|/home/jose/proyectos/baileys-bridge|/home/ubuntu/baileys-bridge|main|main
+  staging|deploy@staging.empresa.com|/home/jose/proyectos/baileys-bridge|/opt/baileys-bridge|develop|main
 
 ${BLUE}Requisitos:${NC}
   - Acceso SSH sin contraseña (claves SSH) a los servidores remotos
@@ -334,17 +410,21 @@ ${BLUE}Requisitos:${NC}
   - ./service.sh restart requiere permisos de root en el servidor (sudo)
 
 ${BLUE}Ejemplos:${NC}
-  $0                               # Despliega y actualiza todos
+  $0                               # Lista los remotos configurados
   $0 produccion                    # Despliega y actualiza solo 'produccion'
-  $0 --tag v1.2.3                  # Despliega y crea/pushea el tag v1.2.3
-  $0 --tag v1.2.3 produccion       # Tag + solo el remoto 'produccion'
+  $0 --tag v1.2.3 produccion       # Tag + despliegue del remoto 'produccion'
   $0 --add                         # Agrega nuevo remoto
   $0 --remove staging              # Elimina 'staging'
 EOF
 }
 
 # Main
-case "${1:-}" in
+if [[ $# -eq 0 ]]; then
+    cmd_list
+    exit 0
+fi
+
+case "${1}" in
     --list|-l)
         cmd_list
         ;;

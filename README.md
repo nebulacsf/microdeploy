@@ -1,6 +1,6 @@
 # MicroDeploy
 
-Script de despliegue automatizado para proyectos de NebulaCSF. Realiza merge a `main`, push a GitHub y actualización en servidores remotos vía SSH.
+Script de despliegue automatizado para proyectos de NebulaCSF. Realiza merge a la rama principal (`main`/`master`), push a GitHub y actualización de un servidor remoto vía SSH.
 
 ---
 
@@ -33,21 +33,33 @@ touch remotes.conf
 | Archivo | Descripción |
 |---------|-------------|
 | `microdeploy.sh` | Script principal de despliegue |
-| `remotes.conf` | Configuración de servidores remotos (formato `nombre\|user@host\|directorio\|rama`) |
+| `remotes.conf` | Configuración de servidores remotos (formato `nombre\|user@host\|dir_local\|dir_remoto\|rama\|main_branch`) |
 
 ---
 
 ## Configuración de remotos (`remotes.conf`)
 
-Formato: `nombre|user@host|directorio|rama`
+Formato: `nombre|user@host|directorio_local|directorio_remoto|rama|main_branch`
 
 ```
-produccion|ubuntu@192.168.1.100|/home/ubuntu/mi-proyecto|main
-staging|deploy@staging.empresa.com|/opt/mi-proyecto|develop
+produccion|ubuntu@192.168.1.100|/home/jose/mi-proyecto|/home/ubuntu/mi-proyecto|main|main
+staging|deploy@staging.empresa.com|/home/jose/mi-proyecto|/opt/mi-proyecto|develop|main
 ```
+
+Campos:
+
+| Campo | Descripción |
+|-------|-------------|
+| `nombre` | Identificador único del remoto |
+| `user@host` | Conexión SSH al servidor |
+| `directorio_local` | Repositorio git **local**: aquí se hace `git checkout <main_branch>`, el merge de tu rama actual y el push a GitHub |
+| `directorio_remoto` | Repositorio git en el **servidor**: aquí se hace `git pull origin <rama>` |
+| `rama` | Rama que se actualiza en el servidor con `git pull` (default `main`) |
+| `main_branch` | Rama principal del repo local, `main` o `master` (default `main`) |
 
 - Se ignoran líneas vacías y comentarios (`#`)
-- Cada entrada debe tener exactamente 4 campos separados por `|`
+- `rama` y `main_branch` pueden omitirse y toman el valor `main`
+- Las entradas en el formato antiguo de 4 campos (`nombre|user@host|dir_remoto|rama`) se migran automáticamente con un aviso: directorio local = directorio donde está el script y `main_branch = main`
 
 También puedes gestionar remotos de forma interactiva:
 
@@ -60,10 +72,11 @@ También puedes gestionar remotos de forma interactiva:
 
 ## Uso
 
-### Desplegar a todos los remotos
+### Ver la configuración actual
 
 ```bash
-./microdeploy.sh
+./microdeploy.sh      # sin argumentos: imprime los remotos configurados
+./microdeploy.sh --list
 ```
 
 ### Desplegar a un remoto específico
@@ -72,10 +85,11 @@ También puedes gestionar remotos de forma interactiva:
 ./microdeploy.sh produccion
 ```
 
+> ⚠️ **Importante:** el despliegue **siempre** requiere indicar el remoto objetivo. No existe opción para actualizar "todos" los remotos a la vez.
+
 ### Crear y pushear un tag (opcional)
 
 ```bash
-./microdeploy.sh --tag v1.2.3
 ./microdeploy.sh --tag v1.2.3 produccion
 ```
 
@@ -94,21 +108,21 @@ También puedes gestionar remotos de forma interactiva:
 
 El script ejecuta los siguientes pasos **en orden**:
 
-### Pasos locales (siempre)
+### Pasos locales (en `directorio_local`)
 
 1. Guarda la rama actual como `CURRENT_BRANCH`
-2. `git checkout main`
+2. `git checkout <main_branch>` (rama principal configurada: `main` o `master`)
 3. `git merge --no-edit CURRENT_BRANCH`
 4. `git tag <tag>` _(solo si se pasa `--tag`)_
 5. `git checkout CURRENT_BRANCH`
-6. `git push github main dev`
+6. `git push github <main_branch> dev`
 7. `git push github <tag>` _(solo si se pasó `--tag`)_
 
-### Pasos remotos (por cada servidor)
+### Pasos remotos
 
 Vía SSH:
 
-1. `cd <directorio>`
+1. `cd <directorio_remoto>`
 2. `git pull origin <rama>`
 3. `./service.sh restart`
 
@@ -129,14 +143,15 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 ## Ejemplos comunes
 
 ```bash
-# Despliegue completo (todos los remotos)
+# Ver remotos configurados
 ./microdeploy.sh
-
-# Solo a producción, con tag
-./microdeploy.sh --tag v2.0.0 produccion
-
-# Ver configuración actual
 ./microdeploy.sh --list
+
+# Desplegar en producción
+./microdeploy.sh produccion
+
+# Desplegar en producción con tag
+./microdeploy.sh --tag v2.0.0 produccion
 
 # Agregar un nuevo servidor
 ./microdeploy.sh --add
@@ -147,11 +162,11 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 ## Flujo de ramas
 
 - Los cambios se desarrollan en cualquier rama (`dev`, `feature/*`, etc.)
-- Al ejecutar `microdeploy.sh` desde esa rama, se hace merge a `main` automáticamente
-- Se pushea `main` y `dev` a `github`
+- Al ejecutar `microdeploy.sh <remoto>` desde esa rama: se hace merge a la rama principal configurada (`main`/`master`) automáticamente en el `directorio_local`
+- Se pushea la rama principal y `dev` a `github`
 - Si algo falla antes del push, el repo queda en la rama original (validación previa del tag)
 
-> ⚠️ **Nota:** `git push github main dev` asume que la rama `dev` existe localmente. Si no aplica a tu proyecto, ajusta el script.
+> ⚠️ **Nota:** `git push github <main_branch> dev` asume que la rama `dev` existe localmente. Si no aplica a tu proyecto, ajusta el script.
 
 ---
 
@@ -159,8 +174,8 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 
 - El script usa `set -euo pipefail` (falla ante cualquier error)
 - Se valida que el tag no exista **antes** de modificar ramas
-- Si un remoto falla, el script continúa con los demás y muestra un resumen al final
-- Código de salida distinto de `0` si algún remoto falla
+- Se valida que el remoto objetivo exista **antes** de tocar el repositorio local
+- Código de salida distinto de `0` si algo falla
 
 ---
 
@@ -169,10 +184,12 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 | Problema | Solución |
 |----------|----------|
 | `No se puede conectar via SSH` | Verificar clave SSH: `ssh user@host true` |
-| `git pull` falla en remoto | Revisar que el directorio tenga remote `origin` y permisos |
+| `git pull` falla en remoto | Revisar que el directorio remoto tenga remote `origin` y permisos |
 | `./service.sh restart` falla | Verificar que el usuario SSH tenga `sudo` sin contraseña |
 | `El tag ya existe` | Usar otro nombre de tag o borrar el existente |
 | Merge con conflictos | Resolver manualmente; el script se detiene |
+| `'...' no es un repositorio git` | Revisar el campo `directorio_local` en `remotes.conf` |
+| `No se encontró remoto` | Verificar el nombre con `./microdeploy.sh --list` |
 
 ---
 
