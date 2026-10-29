@@ -82,6 +82,17 @@ save_remotes() {
     printf '%s\n' "${REMOTES[@]}" > "${CONFIG_FILE}"
 }
 
+# Truncar string si excede un ancho máximo
+truncate_str() {
+    local str="$1"
+    local max="$2"
+    if [[ ${#str} -le ${max} ]]; then
+        printf '%s' "${str}"
+    else
+        printf '%s...' "${str:0:$((max-3))}"
+    fi
+}
+
 # Listar remotos
 cmd_list() {
     load_remotes
@@ -94,7 +105,7 @@ cmd_list() {
     printf "%-16s %-24s %-30s %-30s %-10s %s\n" "──────" "────" "──────" "──────" "────" "──────"
     for entry in "${REMOTES[@]}"; do
         IFS='|' read -r name host local_dir remote_dir branch main_branch <<< "${entry}"
-        printf "%-16s %-24s %-30s %-30s %-10s %s\n" "${name}" "${host}" "${local_dir}" "${remote_dir}" "${branch}" "${main_branch}"
+        printf "%-16s %-24s %-30s %-30s %-10s %s\n" "$(truncate_str "${name}" 16)" "$(truncate_str "${host}" 24)" "$(truncate_str "${local_dir}" 30)" "$(truncate_str "${remote_dir}" 30)" "$(truncate_str "${branch}" 10)" "${main_branch}"
     done
 }
 
