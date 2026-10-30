@@ -20,7 +20,7 @@
 #   ./deploy.sh --remove <nombre> # Elimina un remoto
 #   ./deploy.sh --help         # Muestra esta ayuda
 #
-# Configuración en: remotes.conf (formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch)
+# Configuración en: $HOME/.microdeploy/remotes.conf (formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch|remoto_git)
 # Nota: el paso 7 ejecuta ./service.sh restart en el remoto; ese comando
 #       requiere permisos de root en el servidor (sudo sin contraseña).
 # ============================================================
@@ -36,7 +36,17 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/remotes.conf"
+HOME_DIR="${HOME:-$USER}"
+CONFIG_FILE="${HOME_DIR}/.microdeploy/remotes.conf"
+
+# Migrar automáticamente desde ubicación antigua si existe
+ensure_config_dir() {
+    mkdir -p "${HOME_DIR}/.microdeploy"
+    if [[ ! -f "${CONFIG_FILE}" ]] && [[ -f "${SCRIPT_DIR}/remotes.conf" ]]; then
+        cp "${SCRIPT_DIR}/remotes.conf" "${CONFIG_FILE}"
+        log_warn "Configuración migrada de '${SCRIPT_DIR}/remotes.conf' a '${CONFIG_FILE}'"
+    fi
+}
 
 # Funciones de utilidad
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -49,6 +59,7 @@ log_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
 # Formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch|remoto_git
 load_remotes() {
     REMOTES=()
+    ensure_config_dir
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         return
     fi
@@ -79,6 +90,7 @@ load_remotes() {
 
 # Guardar configuración
 save_remotes() {
+    mkdir -p "${HOME_DIR}/.microdeploy"
     printf '%s\n' "${REMOTES[@]}" > "${CONFIG_FILE}"
 }
 
