@@ -218,10 +218,17 @@ func cmdList(remotes []Remote) {
 		return
 	}
 	fmt.Printf("%sRemotos configurados:%s\n", clrCyan, clrReset)
-	fmt.Printf("%-16s %-24s\n", "NOMBRE", "USUARIO@HOST")
-	fmt.Printf("%-16s %-24s\n", "──────", "────")
+	fmt.Printf("%-14s %-26s %-30s %-30s %-13s %-13s %-10s\n",
+		"NOMBRE", "USUARIO@HOST", "DIR. LOCAL", "DIR. REMOTO", "RAMA", "RAMA PRINC.", "REMOTO GIT")
+	fmt.Printf("%-14s %-26s %-30s %-30s %-13s %-13s %-10s\n",
+		strings.Repeat("─", 14), strings.Repeat("─", 26), strings.Repeat("─", 30),
+		strings.Repeat("─", 30), strings.Repeat("─", 13), strings.Repeat("─", 13),
+		strings.Repeat("─", 10))
 	for _, r := range remotes {
-		fmt.Printf("%-16s %-24s\n", truncateStr(r.Name, 16), truncateStr(r.Host, 24))
+		fmt.Printf("%-14s %-26s %-30s %-30s %-13s %-13s %-10s\n",
+			truncateStr(r.Name, 14), truncateStr(r.Host, 26), truncateStr(r.LocalDir, 30),
+			truncateStr(r.RemoteDir, 30), truncateStr(r.Branch, 13), truncateStr(r.MainBranch, 13),
+			truncateStr(r.GitRemote, 10))
 	}
 }
 
