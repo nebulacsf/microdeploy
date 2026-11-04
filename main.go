@@ -9,7 +9,7 @@
 //  4. git checkout <current branch>
 //  5. git push <git_remote> <main_branch> dev
 //  6. git push <git_remote> <tag> (if --tag was given)
-//  7. On the remote (SSH): git pull + ./service.sh restart
+//  7. On the remote (SSH): git pull + ./service.sh restart (solo con --restart-systemd)
 package main
 
 import (
@@ -466,8 +466,8 @@ func deployLocal(localDir, mainBranch, tag, gitRemote string) error {
 	return nil
 }
 
-// updateRemote runs git pull + ./service.sh restart on the remote via SSH.
-func updateRemote(name, host, remoteDir, branch string) error {
+// updateRemote runs git pull (and optionally ./service.sh restart) on the remote via SSH.
+func updateRemote(name, host, remoteDir, branch string, restartSystemd bool) error {
 	logStep("Actualizando %s (%s:%s)...", name, host, remoteDir)
 
 	// Check SSH connectivity.
@@ -476,15 +476,22 @@ func updateRemote(name, host, remoteDir, branch string) error {
 		return err
 	}
 
+	restartStep := ""
+	restartEcho := "echo 'Servicio no reiniciado (usa --restart-systemd para reiniciarlo)'"
+	if restartSystemd {
+		restartStep = "./service.sh restart 2>&1"
+		restartEcho = "echo 'Servicio reiniciado'"
+	}
+
 	remoteCmd := fmt.Sprintf(`
         set -euo pipefail
         cd '%s' || { echo 'Directorio no existe'; exit 1; }
         echo 'Directorio actual: '\$(pwd)
         git pull origin '%s' 2>&1
         echo 'Git pull completado'
-        ./service.sh restart 2>&1
-        echo 'Servicio reiniciado'
-`, remoteDir, branch)
+        %s
+        %s
+`, remoteDir, branch, restartStep, restartEcho)
 
 	if err := runCmd("", "ssh", host, remoteCmd); err != nil {
 		logErr("Error actualizando %s", name)
@@ -494,30 +501,32 @@ func updateRemote(name, host, remoteDir, branch string) error {
 	return nil
 }
 
-// parseDeployArgs parses --tag <tag> and an optional target name.
-func parseDeployArgs(args []string) (tag, target string, err error) {
+// parseDeployArgs parses --tag <tag>, --restart-systemd, and an optional target name.
+func parseDeployArgs(args []string) (tag, target string, restartSystemd bool, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--tag" || a == "-t":
 			if i+1 >= len(args) || args[i+1] == "" {
-				return "", "", errors.New("El parámetro --tag requiere un nombre de tag (ej. v1.2.3)")
+				return "", "", false, errors.New("El parámetro --tag requiere un nombre de tag (ej. v1.2.3)")
 			}
 			tag = args[i+1]
 			i++
+		case a == "--restart-systemd":
+			restartSystemd = true
 		case strings.HasPrefix(a, "-"):
-			return "", "", fmt.Errorf("Argumento desconocido: %s", a)
+			return "", "", false, fmt.Errorf("Argumento desconocido: %s", a)
 		default:
 			if target != "" {
-				return "", "", fmt.Errorf("Argumento inesperado: %s", a)
+				return "", "", false, fmt.Errorf("Argumento inesperado: %s", a)
 			}
 			target = a
 		}
 	}
-	return tag, target, nil
+	return tag, target, restartSystemd, nil
 }
 
-func cmdDeploy(tag, target string) int {
+func cmdDeploy(tag, target string, restartSystemd bool) int {
 	if _, err := exec.LookPath("git"); err != nil {
 		logErr("git no está disponible en este sistema")
 		return 1
@@ -556,7 +565,7 @@ func cmdDeploy(tag, target string) int {
 			}
 			processed[key] = true
 		}
-		if err := updateRemote(r.Name, r.Host, r.RemoteDir, r.Branch); err != nil {
+		if err := updateRemote(r.Name, r.Host, r.RemoteDir, r.Branch, restartSystemd); err != nil {
 			failed++
 		} else {
 			success++
@@ -582,12 +591,13 @@ func showHelp() {
   4. git checkout <rama actual>
   5. git push <remoto_git> <rama principal> dev
   6. git push <remoto_git> <tag> (si se indicó --tag)
-  7. En el remoto (SSH): git pull + ./service.sh restart
+  7. En el remoto (SSH): git pull + ./service.sh restart (solo con --restart-systemd)
 
 %[2]sUso:%[1]s
   %[4]s                    Lista los remotos configurados
   %[4]s <nombre>           Despliega y actualiza solo el remoto especificado
   %[4]s --tag <tag> <nombre>  Despliega el remoto y además crea y pushea un tag al remoto git
+  %[4]s <nombre> --restart-systemd  Despliega y además ejecuta ./service.sh restart en el remoto
   %[4]s --list             Lista los remotos configurados
   %[4]s --add              Agrega un remoto interactivamente
   %[4]s --remove <nombre>  Elimina un remoto
@@ -608,12 +618,13 @@ Formato: nombre|user@host|directorio_local|directorio_remoto|rama|main_branch|re
   - Acceso SSH sin contraseña (claves SSH) a los servidores remotos
   - El directorio remoto debe ser un repositorio git con remote 'origin'
   - El usuario SSH debe tener permisos de escritura en el directorio
-  - ./service.sh restart requiere permisos de root en el servidor (sudo)
+  - ./service.sh restart (con --restart-systemd) requiere permisos de root en el servidor (sudo)
 
 %[2]sEjemplos:%[1]s
   %[4]s                               # Lista los remotos configurados
-  %[4]s produccion                    # Despliega y actualiza solo 'produccion'
-  %[4]s --tag v1.2.3 produccion       # Tag + despliegue del remoto 'produccion'
+  %[4]s produccion                    # Despliega y actualiza solo 'produccion' (sin reiniciar servicio)
+  %[4]s produccion --restart-systemd  # Despliega y ejecuta ./service.sh restart en el remoto
+  %[4]s --tag v1.2.3 produccion --restart-systemd  # Tag + despliegue + reinicio del servicio
   %[4]s --add                         # Agrega nuevo remoto
   %[4]s --remove staging              # Elimina 'staging'
 `, clrReset, clrBlue, clrCyan, prog, fullConfigPath())
@@ -662,11 +673,11 @@ func main() {
 	case "--help", "-h":
 		showHelp()
 	default:
-		tag, target, err := parseDeployArgs(args)
+		tag, target, restartSystemd, err := parseDeployArgs(args)
 		if err != nil {
 			logErr("%v", err)
 			os.Exit(1)
 		}
-		os.Exit(cmdDeploy(tag, target))
+		os.Exit(cmdDeploy(tag, target, restartSystemd))
 	}
 }

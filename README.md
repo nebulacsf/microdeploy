@@ -11,7 +11,7 @@ Herramienta de despliegue automatizado para proyectos de NebulaCSF, escrita en *
 - **Acceso SSH sin contraseña** (claves SSH configuradas) a cada servidor remoto
 - Cada directorio remoto debe ser un repositorio git con remote `origin`
 - Permisos de escritura en el directorio remoto
-- `sudo` sin contraseña en el servidor remoto (necesario para `./service.sh restart`)
+- `sudo` sin contraseña en el servidor remoto (necesario para `./service.sh restart` cuando se usa `--restart-systemd`)
 
 ---
 
@@ -97,10 +97,17 @@ También puedes gestionar remotos de forma interactiva:
 
 > ⚠️ **Importante:** el despliegue **siempre** requiere indicar el remoto objetivo. No existe opción para actualizar "todos" los remotos a la vez.
 
+Por defecto el despliegue **no** ejecuta `./service.sh restart` en el remoto (para proyectos que no lo usan). Si quieres reiniciar el servicio, añade el flag `--restart-systemd`:
+
+```bash
+./microdeploy produccion --restart-systemd
+```
+
 ### Crear y pushear un tag (opcional)
 
 ```bash
 ./microdeploy --tag v1.2.3 produccion
+./microdeploy --tag v1.2.3 produccion --restart-systemd   # tag + reinicio
 ```
 
 ### Gestión de configuración
@@ -134,13 +141,13 @@ Vía SSH:
 
 1. `cd <directorio_remoto>`
 2. `git pull origin <rama>`
-3. `./service.sh restart`
+3. `./service.sh restart` _(solo si se pasó `--restart-systemd`)_
 
 ---
 
 ## Estructura de `service.sh` (en cada remoto)
 
-El script remoto debe existir en el directorio del proyecto y exponer los comandos:
+El script remoto debe existir en el directorio del proyecto y exponer los comandos (solo se ejecuta cuando se usa `--restart-systemd`):
 
 ```bash
 ./service.sh restart
@@ -157,11 +164,14 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 ./microdeploy
 ./microdeploy --list
 
-# Desplegar en producción
+# Desplegar en producción (sin reiniciar servicio)
 ./microdeploy produccion
 
-# Desplegar en producción con tag
-./microdeploy --tag v2.0.0 produccion
+# Desplegar en producción y reiniciar el servicio
+./microdeploy produccion --restart-systemd
+
+# Desplegar en producción con tag y reiniciar el servicio
+./microdeploy --tag v2.0.0 produccion --restart-systemd
 
 # Agregar un nuevo servidor
 ./microdeploy --add
@@ -195,7 +205,7 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 |----------|----------|
 | `No se puede conectar via SSH` | Verificar clave SSH: `ssh user@host true` |
 | `git pull` falla en remoto | Revisar que el directorio remoto tenga remote `origin` y permisos |
-| `./service.sh restart` falla | Verificar que el usuario SSH tenga `sudo` sin contraseña |
+| `./service.sh restart` falla | Verificar que el usuario SSH tenga `sudo` sin contraseña y que se usó `--restart-systemd` |
 | `El tag ya existe` | Usar otro nombre de tag o borrar el existente |
 | Merge con conflictos | Resolver manualmente; el script se detiene |
 | `'...' no es un repositorio git` | Revisar el campo `directorio_local` en `remotes.conf` |
