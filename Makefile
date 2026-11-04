@@ -22,6 +22,7 @@ install: build
 test: build
 	@./$(BINARY) --help >/dev/null && echo "help: OK"
 	@./$(BINARY) --list 2>&1 || true
+	@./$(BINARY) --status 2>&1 || true
 	@echo "test completo"
 
 clean:

@@ -116,8 +116,37 @@ Por defecto el despliegue **no** ejecuta `./service.sh restart` en el remoto (pa
 ./microdeploy --list              # Lista remotos configurados
 ./microdeploy --add               # Agrega un remoto interactivamente
 ./microdeploy --remove <nombre>   # Elimina un remoto
+./microdeploy --status            # Estado de todos los remotos (comparación de commits)
+./microdeploy --status <nombre>   # Estado de un remoto específico
 ./microdeploy --help              # Muestra ayuda
 ```
+
+### Ver estado de sincronización (`--status`)
+
+Compara la **rama actual del repo local** con la **rama configurada del servidor** y muestra cuántos commits de diferencia hay:
+
+```bash
+./microdeploy --status              # todos los remotos
+./microdeploy --status produccion   # solo un remoto
+```
+
+```text
+[STATUS] produccion (ubuntu@192.168.1.100:/home/ubuntu/mi-proyecto)
+  local  (dev       ): a1b2c3d
+  remoto (main      ): e4f5g6h
+[WARN] El remoto 'produccion' está 2 commits ATRASADO (despliegue pendiente)
+```
+
+Resultados posibles:
+
+| Resultado | Significado |
+|-----------|-------------|
+| `Actualizado (al día)` | Local y servidor están en el mismo commit |
+| `Atrasado N commits` | El local tiene commits que el servidor no (despliegue pendiente) |
+| `Adelantado N commits` | El servidor tiene commits que el local no tiene |
+| `Divergieron` | Ambas partes tienen commits propios |
+
+> ℹ️ Para comparar se consulta el servidor vía SSH con `git fetch` (escribe solo en `FETCH_HEAD`: no modifica refs ni el código local). Requiere acceso SSH sin contraseña, igual que el despliegue.
 
 ---
 
@@ -172,6 +201,10 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 
 # Desplegar en producción con tag y reiniciar el servicio
 ./microdeploy --tag v2.0.0 produccion --restart-systemd
+
+# Ver si el servidor está al día con el repo local
+./microdeploy --status
+./microdeploy --status produccion
 
 # Agregar un nuevo servidor
 ./microdeploy --add

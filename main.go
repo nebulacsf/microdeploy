@@ -14,12 +14,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -255,6 +257,142 @@ func cmdInspect(remotes []Remote, target string) int {
 	return 1
 }
 
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+func pluralCnt(n int, singular string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %ss", n, singular)
+}
+
+func countCommits(dir, rangeSpec string) (int, error) {
+	out, err := runOutput(dir, "git", "rev-list", "--count", rangeSpec)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(out)
+}
+
+// cmdStatus muestra cuántos commits de diferencia hay entre el repo local
+// (rama actual) y el repo del servidor remoto (rama configurada), indicando
+// si el remoto está actualizado, atrasado o adelantado.
+func cmdStatus(remotes []Remote, target string) int {
+	if len(remotes) == 0 {
+		logWarn("No hay remotos configurados. Usa '%s --add' para agregar uno.", os.Args[0])
+		return 1
+	}
+	if target != "" && !findRemote(remotes, target) {
+		logErr("No se encontró remoto '%s'", target)
+		return 1
+	}
+
+	failed := 0
+	success := 0
+
+	for _, r := range remotes {
+		if target != "" && r.Name != target {
+			continue
+		}
+
+		fmt.Printf("%s[STATUS]%s %s (%s:%s)\n", clrCyan, clrReset, r.Name, r.Host, r.RemoteDir)
+
+		// 1. Validar que el directorio local exista y sea un repositorio git.
+		if fi, err := os.Stat(r.LocalDir); err != nil || !fi.IsDir() {
+			logErr("El directorio local '%s' no existe", r.LocalDir)
+			failed++
+			fmt.Println()
+			continue
+		}
+		if err := runSilent(r.LocalDir, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
+			logErr("'%s' no es un repositorio git", r.LocalDir)
+			failed++
+			fmt.Println()
+			continue
+		}
+
+		// 2. Rama actual y HEAD del repo local.
+		localBranch, err := runOutput(r.LocalDir, "git", "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil {
+			logErr("No se pudo determinar la rama actual en %s", r.LocalDir)
+			failed++
+			fmt.Println()
+			continue
+		}
+		localSHA, err := runOutput(r.LocalDir, "git", "rev-parse", "HEAD")
+		if err != nil {
+			logErr("No se pudo determinar el HEAD local en %s", r.LocalDir)
+			failed++
+			fmt.Println()
+			continue
+		}
+
+		// 3. Traer solo el puntero de la rama configurada del repo del servidor
+		//    (se escribe únicamente en FETCH_HEAD, sin tocar refs ni working tree).
+		sshURL := r.Host + ":" + r.RemoteDir
+		if out, err := runOutput(r.LocalDir, "git", "-c",
+			"core.sshCommand=ssh -o ConnectTimeout=10 -o BatchMode=yes",
+			"fetch", sshURL, "refs/heads/"+r.Branch); err != nil {
+			logErr("No se pudo contactar el repo remoto (%s): %s", sshURL, out)
+			failed++
+			fmt.Println()
+			continue
+		}
+		remoteSHA, err := runOutput(r.LocalDir, "git", "rev-parse", "FETCH_HEAD")
+		if err != nil {
+			logErr("No se pudo leer FETCH_HEAD en %s", r.LocalDir)
+			failed++
+			fmt.Println()
+			continue
+		}
+
+		// 4. Contar la diferencia en ambas direcciones.
+		localAhead, err := countCommits(r.LocalDir, "FETCH_HEAD..HEAD")
+		if err != nil {
+			logErr("No se pudieron contar los commits (local adelantado)")
+			failed++
+			fmt.Println()
+			continue
+		}
+		remoteAhead, err := countCommits(r.LocalDir, "HEAD..FETCH_HEAD")
+		if err != nil {
+			logErr("No se pudieron contar los commits (remoto adelantado)")
+			failed++
+			fmt.Println()
+			continue
+		}
+
+		// 5. Resultado.
+		fmt.Printf("  local  (%-10s): %s\n", localBranch, shortSHA(localSHA))
+		fmt.Printf("  remoto (%-10s): %s\n", r.Branch, shortSHA(remoteSHA))
+		switch {
+		case localAhead == 0 && remoteAhead == 0:
+			logOk("Remoto '%s' está actualizado (al día)", r.Name)
+		case localAhead > 0 && remoteAhead == 0:
+			logWarn("El remoto '%s' está %s ATRASADO (despliegue pendiente)", r.Name, pluralCnt(localAhead, "commit"))
+		case localAhead == 0 && remoteAhead > 0:
+			logWarn("El remoto '%s' está %s ADELANTADO (local atrasado)", r.Name, pluralCnt(remoteAhead, "commit"))
+		default:
+			logWarn("Local y remoto '%s' divergieron: local +%d, remoto +%d", r.Name, localAhead, remoteAhead)
+		}
+		success++
+		fmt.Println()
+	}
+
+	if target == "" && len(remotes) > 1 {
+		fmt.Printf("%sResumen:%s %d exitoso(s), %d fallido(s)\n", clrCyan, clrReset, success, failed)
+	}
+	if failed > 0 {
+		return 1
+	}
+	return 0
+}
+
 func findRemote(remotes []Remote, name string) bool {
 	for _, r := range remotes {
 		if r.Name == name {
@@ -378,6 +516,17 @@ func runSilent(dir string, name string, args ...string) error {
 	return cmd.Run()
 }
 
+// runOutput runs a command in dir and returns its combined output (trimmed).
+func runOutput(dir string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	return strings.TrimSpace(out.String()), err
+}
+
 // deployLocal runs the local steps. Returns an error on failure.
 func deployLocal(localDir, mainBranch, tag, gitRemote string) error {
 	if mainBranch == "" {
@@ -486,7 +635,7 @@ func updateRemote(name, host, remoteDir, branch string, restartSystemd bool) err
 	remoteCmd := fmt.Sprintf(`
         set -euo pipefail
         cd '%s' || { echo 'Directorio no existe'; exit 1; }
-        echo 'Directorio actual: '\$(pwd)
+        echo 'Directorio actual: ' $PWD
         git pull origin '%s' 2>&1
         echo 'Git pull completado'
         %s
@@ -602,6 +751,8 @@ func showHelp() {
   %[4]s --add              Agrega un remoto interactivamente
   %[4]s --remove <nombre>  Elimina un remoto
   %[4]s --inspect <nombre> Muestra detalles completos del remoto
+  %[4]s --status           Compara commits local vs remoto de todos los remotos
+  %[4]s --status <nombre>  Compara commits local vs remoto de un remoto específico
   %[4]s --help             Muestra esta ayuda
 
 %[2]sNota:%[1]s el despliegue siempre requiere indicar el remoto a actualizar.
@@ -670,6 +821,17 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(cmdInspect(remotes, target))
+	case "--status", "-s":
+		target := ""
+		if len(args) > 1 {
+			target = args[1]
+		}
+		remotes, err := loadRemotes()
+		if err != nil {
+			logErr("%v", err)
+			os.Exit(1)
+		}
+		os.Exit(cmdStatus(remotes, target))
 	case "--help", "-h":
 		showHelp()
 	default:
