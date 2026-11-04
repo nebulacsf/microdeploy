@@ -17,7 +17,7 @@ build:
 	go build -o $(BINARY) main.go
 
 install: build
-	install -m 0755 $(BINARY) $(PREFIX)/bin/$(BINARY)
+	sudo install -m 0755 $(BINARY) $(PREFIX)/bin/$(BINARY)
 
 test: build
 	@./$(BINARY) --help >/dev/null && echo "help: OK"
