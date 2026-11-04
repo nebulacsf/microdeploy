@@ -225,8 +225,9 @@ func cmdList(remotes []Remote) {
 		strings.Repeat("─", 30), strings.Repeat("─", 13), strings.Repeat("─", 13),
 		strings.Repeat("─", 10))
 	for _, r := range remotes {
+		// El nombre se muestra siempre completo; el resto se recorta si es largo.
 		fmt.Printf("%-14s %-26s %-30s %-30s %-13s %-13s %-10s\n",
-			truncateStr(r.Name, 14), truncateStr(r.Host, 26), truncateStr(r.LocalDir, 30),
+			r.Name, truncateStr(r.Host, 26), truncateStr(r.LocalDir, 30),
 			truncateStr(r.RemoteDir, 30), truncateStr(r.Branch, 13), truncateStr(r.MainBranch, 13),
 			truncateStr(r.GitRemote, 10))
 	}
