@@ -551,12 +551,11 @@ func deployLocal(localDir, mainBranch, tag, gitRemote string) error {
 		return err
 	}
 
-	currentBranchBytes, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+	currentBranch, err := runOutput(localDir, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		logErr("No se pudo determinar la rama actual")
+		logErr("No se pudo determinar la rama actual en %s", localDir)
 		return err
 	}
-	currentBranch := strings.TrimSpace(string(currentBranchBytes))
 	if currentBranch == "" || currentBranch == "HEAD" {
 		logErr("No se pudo determinar la rama actual")
 		return errors.New("cannot determine current branch")
