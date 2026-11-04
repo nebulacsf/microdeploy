@@ -1,0 +1,10 @@
+[
+  {
+    "label": "test deploy",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "./main.go",
+    "args": ["cda"]
+  }
+]
