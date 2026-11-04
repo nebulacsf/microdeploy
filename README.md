@@ -1,13 +1,13 @@
 # MicroDeploy
 
-Script de despliegue automatizado para proyectos de NebulaCSF. Realiza merge a la rama principal (`main`/`master`), push a GitHub y actualización de un servidor remoto vía SSH.
+Herramienta de despliegue automatizado para proyectos de NebulaCSF, escrita en **Go** (binario autocontenido). Realiza merge a la rama principal (`main`/`master`), push a GitHub y actualización de un servidor remoto vía SSH.
 
 ---
 
 ## Requisitos previos
 
-- **Bash** 4.0+ (Linux/macOS)
 - **Git** instalado y repositorio inicializado
+- **Go** (solo para compilar el binario; no es necesario en el equipo de destino)
 - **Acceso SSH sin contraseña** (claves SSH configuradas) a cada servidor remoto
 - Cada directorio remoto debe ser un repositorio git con remote `origin`
 - Permisos de escritura en el directorio remoto
@@ -17,14 +17,23 @@ Script de despliegue automatizado para proyectos de NebulaCSF. Realiza merge a l
 
 ## Instalación
 
-```bash
-# Copiar los archivos al proyecto
-cp microdeploy.sh /ruta/del/proyecto/
-chmod +x microdeploy.sh
+Compilar el binario:
 
-# Crear el archivo de configuración de remotos
-touch remotes.conf
+```bash
+make build            # genera el binario 'microdeploy' en el directorio actual
+# o directamente:
+go build -o microdeploy main.go
 ```
+
+Instalar en el sistema (opcional):
+
+```bash
+make install          # instala en /usr/local/bin (PREFIX para cambiar destino)
+# o manualmente:
+sudo mv microdeploy /usr/local/bin/
+```
+
+El binario es autocontenido: no requiere Bash, se puede copiar a cualquier máquina compatible. La configuración se guarda en `$HOME/.microdeploy/remotes.conf`.
 
 ---
 
@@ -32,7 +41,8 @@ touch remotes.conf
 
 | Archivo | Descripción |
 |---------|-------------|
-| `microdeploy.sh` | Script principal de despliegue |
+| `main.go` | Código fuente Go del despliegue (compila al binario `microdeploy`) |
+| `Makefile` | Targets de build/install/test/clean |
 | `remotes.conf` | Configuración de servidores remotos (formato `nombre\|user@host\|dir_local\|dir_remoto\|rama\|main_branch`) |
 
 ---
@@ -64,8 +74,8 @@ Campos:
 También puedes gestionar remotos de forma interactiva:
 
 ```bash
-./microdeploy.sh --add
-./microdeploy.sh --remove staging
+./microdeploy --add
+./microdeploy --remove staging
 ```
 
 ---
@@ -75,14 +85,14 @@ También puedes gestionar remotos de forma interactiva:
 ### Ver la configuración actual
 
 ```bash
-./microdeploy.sh      # sin argumentos: imprime los remotos configurados
-./microdeploy.sh --list
+./microdeploy      # sin argumentos: imprime los remotos configurados
+./microdeploy --list
 ```
 
 ### Desplegar a un remoto específico
 
 ```bash
-./microdeploy.sh produccion
+./microdeploy produccion
 ```
 
 > ⚠️ **Importante:** el despliegue **siempre** requiere indicar el remoto objetivo. No existe opción para actualizar "todos" los remotos a la vez.
@@ -90,16 +100,16 @@ También puedes gestionar remotos de forma interactiva:
 ### Crear y pushear un tag (opcional)
 
 ```bash
-./microdeploy.sh --tag v1.2.3 produccion
+./microdeploy --tag v1.2.3 produccion
 ```
 
 ### Gestión de configuración
 
 ```bash
-./microdeploy.sh --list              # Lista remotos configurados
-./microdeploy.sh --add               # Agrega un remoto interactivamente
-./microdeploy.sh --remove <nombre>   # Elimina un remoto
-./microdeploy.sh --help              # Muestra ayuda
+./microdeploy --list              # Lista remotos configurados
+./microdeploy --add               # Agrega un remoto interactivamente
+./microdeploy --remove <nombre>   # Elimina un remoto
+./microdeploy --help              # Muestra ayuda
 ```
 
 ---
@@ -144,17 +154,17 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 
 ```bash
 # Ver remotos configurados
-./microdeploy.sh
-./microdeploy.sh --list
+./microdeploy
+./microdeploy --list
 
 # Desplegar en producción
-./microdeploy.sh produccion
+./microdeploy produccion
 
 # Desplegar en producción con tag
-./microdeploy.sh --tag v2.0.0 produccion
+./microdeploy --tag v2.0.0 produccion
 
 # Agregar un nuevo servidor
-./microdeploy.sh --add
+./microdeploy --add
 ```
 
 ---
@@ -162,7 +172,7 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 ## Flujo de ramas
 
 - Los cambios se desarrollan en cualquier rama (`dev`, `feature/*`, etc.)
-- Al ejecutar `microdeploy.sh <remoto>` desde esa rama: se hace merge a la rama principal configurada (`main`/`master`) automáticamente en el `directorio_local`
+- Al ejecutar `microdeploy <remoto>` desde esa rama: se hace merge a la rama principal configurada (`main`/`master`) automáticamente en el `directorio_local`
 - Se pushea la rama principal y `dev` a `github`
 - Si algo falla antes del push, el repo queda en la rama original (validación previa del tag)
 
@@ -189,12 +199,12 @@ Requiere permisos de `sudo` sin contraseña en el servidor remoto.
 | `El tag ya existe` | Usar otro nombre de tag o borrar el existente |
 | Merge con conflictos | Resolver manualmente; el script se detiene |
 | `'...' no es un repositorio git` | Revisar el campo `directorio_local` en `remotes.conf` |
-| `No se encontró remoto` | Verificar el nombre con `./microdeploy.sh --list` |
+| `No se encontró remoto` | Verificar el nombre con `./microdeploy --list` |
 
 ---
 
 ## Desinstalación
 
 ```bash
-rm microdeploy.sh remotes.conf
+rm microdeploy remotes.conf
 ```
